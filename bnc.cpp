@@ -31,6 +31,8 @@ namespace bnc {
       }
 
       void operator<< (Bit bit) {
+	cout << (int)bit << endl;
+
         if (count == 8) {
 	  flush();
 	}
@@ -48,6 +50,8 @@ namespace bnc {
 
 	--count;
         bit = (buffer >> count) & 1;
+
+	cout << (int)bit << endl;
       }
 
       void operator<< (Vector& vector) {
@@ -102,8 +106,8 @@ namespace bnc {
 
 	  bitstream >> bit;
 
-	  value |= bit;
 	  value <<= 1;
+	  value |= bit;
 	}
       }
 
@@ -149,6 +153,17 @@ namespace bnc {
 	}
       }
   };
+  Node* Node::load(BitStream& bitstream) {
+    BitStream::Bit bit;
+
+    bitstream >> bit;
+
+    if (bit) {
+      return new Leaf(bitstream);
+    } else {
+      return new InnerNode(bitstream);
+    }
+  }
   class TreeSerialiser : public NodeVisitor {
     private:
       BitStream& bitstream;
@@ -165,7 +180,7 @@ namespace bnc {
 
 	translations.insert(pair<char, BitStream::Vector>(leaf.value, path));
 
-	for (int i = 7; i > 0; --i) {
+	for (int i = 7; i >= 0; --i) {
 	  bitstream << ((leaf.value >> i) & 1);
 	}
 
@@ -182,17 +197,6 @@ namespace bnc {
 	path.pop_back();
       }
   };
-  Node* Node::load(BitStream& bitstream) {
-    BitStream::Bit bit;
-
-    bitstream >> bit;
-
-    if (bit) {
-      return new Leaf(bitstream);
-    } else {
-      return new InnerNode(bitstream);
-    }
-  }
   class TreeStream {
     private:
       map<char, size_t> counts;
@@ -214,7 +218,7 @@ namespace bnc {
           if (counts.find(byte) != counts.end()) {
             ++counts[byte];
           } else {
-	    counts[byte] = 1;
+	    counts.insert(pair<char, size_t>(byte, 1));
 	  }
         } else {
 	  bitstream << translations[byte];
