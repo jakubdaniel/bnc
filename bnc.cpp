@@ -24,15 +24,13 @@ namespace bnc {
       ofstream* out;
       
     public:
-      BitStream(ofstream& out) : out(&out), count(0), compressed_size(0) {
+      BitStream(ofstream& out) : out(&out), count(0), compressed_size(0), buffer(0) {
       }
 
-      BitStream(ifstream& in) : in(&in), count(0), compressed_size(0) {
+      BitStream(ifstream& in) : in(&in), count(0), compressed_size(0), buffer(0) {
       }
 
       void operator<< (Bit bit) {
-	cout << (int)bit << endl;
-
         if (count == 8) {
 	  flush();
 	}
@@ -50,8 +48,6 @@ namespace bnc {
 
 	--count;
         bit = (buffer >> count) & 1;
-
-	cout << (int)bit << endl;
       }
 
       void operator<< (Vector& vector) {
@@ -318,6 +314,7 @@ namespace bnc {
       }
 
       void decompress(ifstream& in) {
+        in.clear();
         in.seekg(offset, in.beg);
 
         ofstream out(name, ofstream::binary);
@@ -363,9 +360,9 @@ namespace bnc {
 	  cout << " " << file.size << " >> " << file.compressed_size << endl;
 	}
 
-        serialise(size, out);
-
 	head_start = out.tellp();
+
+	serialise(size, out);
 
         for (File& file : files) {
 	  out << file.name << endl;
@@ -392,7 +389,7 @@ namespace bnc {
 
 	deserialise(head_size, in);
 
-	in.seekg(-head_size - 8, in.end);
+	in.seekg(-head_size - 4, in.end);
 
 	deserialise(size, in);
 
@@ -407,21 +404,27 @@ namespace bnc {
 	  deserialise(file_size, in);
 	  deserialise(file_compressed_size, in);
 
-	  cout << "File `" << name << "` " << file_size << " >> " << file_compressed_size << endl;
+	  cout << "File `" << name << "` " << file_size << " >> " << file_compressed_size;
 
           for (vector<File>::iterator it = files.begin(); it != files.end(); ++it) {
             if (it->name.compare(name) == 0) {
               it->size            = file_size;
               it->compressed_size = file_compressed_size;
               it->offset          = offset;
+
+	      cout << " *";
             }
 	  }
+
+	  cout << endl;
 
 	  offset += file_compressed_size;
 	}
 
 	for (File& file : files) {
 	  in.seekg(file.offset, in.beg);
+
+          cout << file.name << endl;
 
 	  file.decompress(in);
 	}
@@ -436,18 +439,18 @@ namespace bnc {
     private:
       void serialise(size_t number, ofstream& out) {
         for (int i = 0; i < 32; i += 8) {
-	  char byte = (number >> i) & 0xFF;
+	  unsigned char byte = (number >> i) & 0xFF;
 
-	  out.write(&byte, 1);
+	  out.write((char*)&byte, 1);
 	}
       }
       void deserialise(size_t& number, ifstream& in) {
         number = 0;
 
         for (int i = 0; i < 32; i += 8) {
-          char byte;
+          unsigned char byte;
 
-	  in.read(&byte, 1);
+	  in.read((char*)&byte, 1);
 
 	  number |= byte << i;
 	}
