@@ -96,16 +96,21 @@ typedef struct Tree Tree;
 struct Tree
 {
   NodeVisitor parent;
+  BitVector* tree;
   BitVector* path;
   BitVector* translations[WORDS];
 
   Count count;
+  Count bit_count;
   Node* table[WORDS];
 };
 
-Tree* tree_new      (void);
+Tree* tree_new      (/* BitStream */);
 void  tree_register (Tree* tree, const Value value);
+void  tree_load     (Tree* tree);
 void  tree_build    (Tree* tree);
+void  tree_write    (Tree* tree, const Value value);
+void  tree_read     (Tree* tree, Value* value);
 void  tree_delete   (Tree* tree);
 
 #endif /* __BNC_H__ */
