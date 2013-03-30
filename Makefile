@@ -1,7 +1,7 @@
 CC = gcc
-CFLAGS = -I. -ggdb
+CFLAGS = -I. -ggdb -fopenmp -Wall -Werror -pedantic
 
 all: bnc
 
 bnc: %: %.o
-	$(CC) -o $* $<
+	$(CC) $(CFLAGS) -o $* $<

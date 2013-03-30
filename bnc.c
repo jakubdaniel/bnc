@@ -4,6 +4,35 @@
 
 #include <bnc.h>
 
+static char* pretty_print_size (Count size)
+{
+  const char* units[] =
+  {
+    "B", "KiB", "MiB", "GiB", "TiB", "PiB"
+  };
+
+  Count power = 0;
+  Count necessary;
+  float float_size;
+  char* buffer;
+
+  while (size >> 10 && power < sizeof(units) / sizeof(*units))
+  {
+    size >>= 10;
+    ++power;
+  }
+
+  float_size = ((float)size) / (1 << (10 * (power - 1)));
+
+  necessary = snprintf(NULL, 0, "%.2f %s", float_size, units[power]);
+
+  buffer = (char*)malloc((necessary + 1) * sizeof(char));
+  
+  snprintf(buffer, necessary, "%.2f %s", float_size, units[power]);
+
+  return buffer;
+}
+
 Count node_get_count (Node* node)
 {
   return node->count;
@@ -98,16 +127,6 @@ void node_visitor_delete (NodeVisitor* visitor)
   visitor->class->destroy(visitor);
 }
 
-ABCD_dump (BitVector* vector)
-{
-  Count i;
-  for (i = 0; i < vector->count; ++i)
-  {
-    printf("%i", (vector->bytes[i / 8] & (1 << (i % 8))) ? 1 : 0);
-  }
-  printf("\n");
-}
-
 BitVector* bit_vector_new (void)
 {
   BitVector* bit_vector = (BitVector*)malloc(sizeof(BitVector));
@@ -161,6 +180,11 @@ void bit_vector_delete (BitVector* vector)
   free(vector);
 }
 
+BitStream* bit_stream_new (FILE* backend, Count size, int protocol, Count offset)
+{
+  BitStream* stream = (
+}
+
 static void tree_visit_inner_node (NodeVisitor* visitor, InnerNode* node)
 {
   Tree* tree = (Tree*)visitor;
@@ -185,13 +209,12 @@ static void tree_visit_inner_node (NodeVisitor* visitor, InnerNode* node)
 static void tree_visit_leaf_node (NodeVisitor* visitor, LeafNode* node)
 {
   Tree* tree = (Tree*)visitor;
+  Count i;
 
   /**
    * Serialise leaf
    */
   bit_vector_push(tree->tree, ONE);
-
-  Count i;
 
   for (i = 0; i < sizeof(Value) * 8; ++i)
   {
@@ -211,11 +234,10 @@ static void tree_visit_leaf_node (NodeVisitor* visitor, LeafNode* node)
 static void tree_destroy (NodeVisitor* visitor)
 {
   Tree* tree = (Tree*)visitor;
+  Count i;
 
   bit_vector_delete(tree->tree);
   bit_vector_delete(tree->path);
-
-  Count i;
 
   for (i = 0; i < WORDS; ++i)
   {
@@ -237,6 +259,7 @@ static NodeVisitorClass tree_class =
 Tree* tree_new (void)
 {
   Tree* tree = (Tree*)malloc(sizeof(Tree));
+  Count i;
 
   tree->parent.class = &tree_class;
 
@@ -248,8 +271,6 @@ Tree* tree_new (void)
   tree->bit_count = 0;
   tree->count     = WORDS;
 
-  Count i;
-  
   for (i = 0; i < tree->count; ++i)
   {
     tree->table[i] = (Node*)leaf_node_new(i, 0);
@@ -325,15 +346,18 @@ void tree_build (Tree* tree)
    * Compute translation table and serialised tree
    */
   node_accept(tree->table[0], (NodeVisitor*)tree);
+}
 
-  printf("LEAVES: %lu, TREE BITS: %lu, TRANSLATED BITS: %lu\n", tree->table[0]->count, tree->bit_count, tree->table[0]->bit_count);
-
-  ABCD_dump(tree->tree);
+void tree_set_stream (Tree* tree, BitStream* bitstream)
+{
+  tree->stream = bitstream;
 }
 
 void tree_write (Tree* tree, const Value value)
 {
-  ABCD_dump(tree->translations[value]);
+  BitVector* translation = tree->translations[value];
+
+  bit_stream_write(tree->stream, translation);
 }
 
 void tree_read (Tree* tree, Value* value)
@@ -345,24 +369,183 @@ void tree_delete (Tree* tree)
   tree->parent.class->destroy((NodeVisitor*)tree);
 }
 
+File* file_new (const char* name)
+{
+  File* file = (File*)malloc(sizeof(File));
+
+  file->name = (char*)malloc(strlen(name) + 1);
+  strcpy(file->name, name);
+
+  return file;
+}
+
+void file_open_read (File* file)
+{
+  int c;
+
+  file->backend = fopen(file->name, "rb");
+  file->tree    = tree_new();
+
+  fseek(file->backend, 0, SEEK_SET);
+
+  c = fgetc(file->backend);
+
+  while (c != EOF)
+  {
+    tree_register(file->tree, c);
+
+    c = fgetc(file->backend);
+  }
+
+  tree_build(file->tree);
+
+  file->size            = ftell(file->backend);
+  file->compressed_size = (file->tree->bit_count + file->tree->table[0]->bit_count + 7) / 8;
+
+  fseek(file->backend, 0, SEEK_SET);
+}
+
+void file_open_write (File* file)
+{
+}
+
+void file_read (File* file, BitStream* bitstream)
+{
+}
+
+void file_write (File* file, BitStream* bitstream)
+{
+}
+
+void file_delete (File* file)
+{
+  tree_delete(file->tree);
+  fclose(file->backend);
+  free(file->name);
+  free(file);
+}
+
+Archive* archive_new (const char* name)
+{
+  Archive* archive = (Archive*)malloc(sizeof(Archive));
+
+  archive->name = (char*)malloc(strlen(name) + 1);
+  strcpy(archive->name, name);
+
+  archive->files = NULL;
+  archive->files_count = 0;
+
+  return archive;
+}
+
+void archive_add_file (Archive* archive, const char* file)
+{
+  archive->files = (File**)realloc(archive->files, (++archive->files_count) * sizeof(File*));
+  archive->files[archive->files_count - 1] = file_new(file);
+}
+
+void archive_compress (Archive* archive)
+{
+  Count i;
+
+  #pragma omp parallel for
+  for (i = 0; i < archive->files_count; ++i)
+  {
+    char* file_size;
+    char* file_compressed_size;
+
+    file_open_read(archive->files[i]);
+
+    file_size            = pretty_print_size(archive->files[i]->size);
+    file_compressed_size = pretty_print_size(archive->files[i]->compressed_size);
+
+    printf("File `%s` %s >> %s\n", archive->files[i]->name, file_size, file_compressed_size);
+
+    free(file_size);
+    free(file_compressed_size);
+  }
+
+  #pragma omp parallel for
+  for (i = 0; i < archive->files_count; ++i)
+  {
+    file_write(archive->files[i], NULL);
+  }
+
+  /**
+   * TODO: write head
+   */
+}
+
+void archive_decompress (Archive* archive)
+{
+  Count i;
+
+  #pragma omp parallel for
+  for (i = 0; i < archive->files_count; ++i)
+  {
+    file_open_write(archive->files[i]);
+  }
+
+  /**
+   * TODO: read head
+   */
+
+  #pragma omp parallel for
+  for (i = 0; i < archive->files_count; ++i)
+  {
+    file_read(archive->files[i], NULL);
+  }
+}
+
+void archive_delete (Archive* archive)
+{
+  Count i;
+
+  #pragma omp parallel for
+  for (i = 0; i < archive->files_count; ++i)
+  {
+    file_delete(archive->files[i]);
+  }
+
+  free(archive->files);
+  free(archive->name);
+  free(archive);
+}
+
+const char* help = "./bnc [bu] archive file1 file2 ...";
+
 int main (int argc, char** argv)
 {
-  Tree* tree = tree_new();
-  tree_register(tree, 'a');
-  tree_register(tree, 'a');
-  tree_register(tree, 'a');
-  tree_register(tree, 'a');
-  tree_register(tree, 'b');
-  tree_register(tree, 'C');
-  tree_register(tree, 'C');
-  tree_register(tree, 'C');
-  tree_register(tree, 'x');
-  tree_build(tree);
-  tree_write(tree, 'a');
-  tree_write(tree, 'b');
-  tree_write(tree, 'C');
-  tree_write(tree, 'x');
-  tree_delete(tree);
+  char op;
+  Archive* archive;
+  Count i;
+
+  if (argc < 3)
+  {
+    printf("%s\n", help);
+
+    return EXIT_FAILURE;
+  }
+
+  op = argv[1][0];
+
+  archive = archive_new(argv[2]);
+
+  argc -= 3;
+  argv += 3;
+
+  for (i = 0; i < argc; ++i)
+  {
+    archive_add_file(archive, argv[i]);
+  }
+
+  switch (op)
+  {
+    case 'b': archive_compress(archive); break;
+    case 'u': archive_decompress(archive); break;
+  }
+
+  archive_delete(archive);
 
   return EXIT_SUCCESS;
 }

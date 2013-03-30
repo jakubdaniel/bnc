@@ -91,6 +91,18 @@ void       bit_vector_push   (BitVector* vector, const Bit bit);
 void       bit_vector_pop    (BitVector* vector);
 void       bit_vector_delete (BitVector* vector);
 
+typedef struct BitStream BitStream;
+
+struct BitStream
+{
+  Byte* memory_block;
+  Count size;
+};
+
+BitStream* bit_stream_new    (FILE* backend, Count size, int protocol, Count offset);
+void       bit_stream_write  (BitStream* stream, BitVector* vector);
+void       bit_stream_delete (BitStream* stream);
+
 typedef struct Tree Tree;
 
 struct Tree
@@ -103,14 +115,50 @@ struct Tree
   Count count;
   Count bit_count;
   Node* table[WORDS];
+
+  BitStream* stream;
 };
 
-Tree* tree_new      (/* BitStream */);
-void  tree_register (Tree* tree, const Value value);
-void  tree_load     (Tree* tree);
-void  tree_build    (Tree* tree);
-void  tree_write    (Tree* tree, const Value value);
-void  tree_read     (Tree* tree, Value* value);
-void  tree_delete   (Tree* tree);
+Tree* tree_new        (void);
+void  tree_register   (Tree* tree, const Value value);
+void  tree_load       (Tree* tree);
+void  tree_build      (Tree* tree);
+void  tree_set_stream (Tree* tree, BitStream* bitstream);
+void  tree_write      (Tree* tree, const Value value);
+void  tree_read       (Tree* tree, Value* value);
+void  tree_delete     (Tree* tree);
+
+typedef struct File File;
+
+struct File
+{
+  FILE* backend;
+  char* name;
+  Tree* tree;
+
+  Count size;
+  Count compressed_size;
+};
+
+File* file_new        (const char* name);
+void  file_open_read  (File* file);
+void  file_open_write (File* file);
+void  file_delete     (File* file);
+
+typedef struct Archive Archive;
+
+struct Archive
+{
+  char* name;
+
+  File** files;
+  Count  files_count;
+};
+
+Archive* archive_new        (const char* name);
+void     archive_add_file   (Archive* archive, const char* file);
+void     archive_compress   (Archive* archive);
+void     archive_decompress (Archive* archive);
+void     archive_delete     (Archive* archive);
 
 #endif /* __BNC_H__ */
