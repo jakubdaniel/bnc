@@ -223,6 +223,9 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
 
 void bit_stream_read (BitStream* stream, Bit* bit)
 {
+  *bit = (stream->memory_block[stream->count / 8] & (1 << (stream->count % 8))) ? ONE : ZERO;
+
+  ++stream->count;
 }
 
 void bit_stream_delete (BitStream* stream)
@@ -594,6 +597,31 @@ const char* help = "./bnc [bu] archive file1 file2 ...";
 
 int main (int argc, char** argv)
 {
+  BitStream stream;
+  BitVector vector;
+  Byte mem[100];
+  Byte vec[3] = {0x01, 0xFF, 0x01};
+  Count i;
+
+  stream.memory_block = mem;
+  stream.count = 0;
+
+  vector.bytes = vec;
+  vector.count = 19;
+
+  memset(mem, 0, 100);
+
+  bit_stream_write(&stream, &vector);
+  bit_stream_write(&stream, &vector);
+
+  for (i = 0; i < stream.count; ++i)
+  {
+    printf("%i", (mem[i / 8] & (1 << (i % 8))) ? 1 : 0);
+  }
+  printf("\n");
+
+  return EXIT_SUCCESS;
+/*
   char op;
   Archive* archive;
   Count i;
@@ -626,4 +654,5 @@ int main (int argc, char** argv)
   archive_delete(archive);
 
   return EXIT_SUCCESS;
+*/
 }
