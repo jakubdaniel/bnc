@@ -3,9 +3,15 @@
 #include <string.h>
 
 #include <fcntl.h>
+#include <unistd.h>
 #include <sys/mman.h>
 
 #include <bnc.h>
+
+#define CUT_LOWER(n, m)     ((n) &   ((1 << (m)) - 1))
+#define CUT_OFF_LOWER(n, m) ((n) & (~((1 << (m)) - 1)))
+#define CUT_UPPER(n, m)     ((n) & (~((1 << (8 - (m))) - 1)))
+#define CUT_OFF_UPPER(n, m) ((n) &   ((1 << (8 - (m))) - 1))
 
 static char* pretty_print_size (Count size)
 {
@@ -196,9 +202,36 @@ BitStream* bit_stream_new (int backend, Count size, int protocol, Count offset)
 
 void bit_stream_write (BitStream* stream, BitVector* vector)
 {
-  /**
-   * Transfer quickly
-   */
+  Count i;
+  Count j = stream->count / 8;
+  Count offset = stream->count % 8;
+  
+  Byte* old_data = stream->memory_block;
+  Byte* new_data = vector->bytes;
+
+  old_data[j] = CUT_LOWER(old_data[j], offset) | CUT_UPPER(new_data[0] << offset, 8 - offset);
+
+  for (i = 1; i < (vector->count + 7) / 8; ++i)
+  {
+    old_data[i + j] = CUT_LOWER(new_data[i - 1] >> (8 - offset), offset) | CUT_UPPER(new_data[i] << offset, 8 - offset);
+  }
+
+  old_data[i + j] = new_data[i - 1] >> (8 - offset);
+
+  stream->count += vector->count;
+
+#if true
+  if (stream->count < 32)
+  {
+    Count k;
+
+    for (k = 0; k < stream->count; ++k)
+    {
+      printf("%i", old_data[k / 8] & (1 << (k % 8)) ? 1 : 0);
+    }
+    printf("\n\n");
+  }
+#endif
 }
 
 void bit_stream_read (BitStream* stream, Bit* bit)
@@ -488,8 +521,8 @@ void archive_add_file (Archive* archive, const char* file)
 void archive_compress (Archive* archive)
 {
   Count i;
-  Count* offset = (Count*)malloc(archive->files_count * sizeof(Count));
-  int backend = open(archive->name, O_WRONLY);
+  Count* offset = (Count*)malloc((archive->files_count + 1) * sizeof(Count));
+  int backend = open(archive->name, O_RDWR | O_CREAT);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -510,10 +543,16 @@ void archive_compress (Archive* archive)
 
   offset[0] = 0;
 
-  for (i = 1; i < archive->files_count; ++i)
+  for (i = 1; i < archive->files_count + 1; ++i)
   {
-    offset[i] = offset[i - 1] + archive->files[i]->compressed_size;
+    offset[i] = offset[i - 1] + archive->files[i - 1]->compressed_size;
   }
+
+  /**
+   * Stretch the file
+   */
+  lseek(backend, offset[archive->files_count] - 1, SEEK_SET);
+  write(backend, "", 1);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
