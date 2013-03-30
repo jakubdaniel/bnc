@@ -219,19 +219,6 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
   old_data[i + j] = new_data[i - 1] >> (8 - offset);
 
   stream->count += vector->count;
-
-#if true
-  if (stream->count < 32)
-  {
-    Count k;
-
-    for (k = 0; k < stream->count; ++k)
-    {
-      printf("%i", old_data[k / 8] & (1 << (k % 8)) ? 1 : 0);
-    }
-    printf("\n\n");
-  }
-#endif
 }
 
 void bit_stream_read (BitStream* stream, Bit* bit)
@@ -412,6 +399,8 @@ void tree_build (Tree* tree)
 void tree_set_stream (Tree* tree, BitStream* stream)
 {
   tree->stream = stream;
+
+  bit_stream_write(tree->stream, tree->tree);
 }
 
 void tree_write (Tree* tree, const Value value)
