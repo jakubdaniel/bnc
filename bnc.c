@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <fcntl.h>
+#include <sys/mman.h>
+
 #include <bnc.h>
 
 static char* pretty_print_size (Count size)
@@ -180,9 +183,32 @@ void bit_vector_delete (BitVector* vector)
   free(vector);
 }
 
-BitStream* bit_stream_new (FILE* backend, Count size, int protocol, Count offset)
+BitStream* bit_stream_new (int backend, Count size, int protocol, Count offset)
 {
-  BitStream* stream = (
+  BitStream* stream = (BitStream*)malloc(sizeof(BitStream*));
+
+  stream->memory_block = mmap(NULL, size, protocol, MAP_SHARED, backend, offset);
+  stream->size = size;
+  stream->count = 0;
+
+  return stream;
+}
+
+void bit_stream_write (BitStream* stream, BitVector* vector)
+{
+  /**
+   * Transfer quickly
+   */
+}
+
+void bit_stream_read (BitStream* stream, Bit* bit)
+{
+}
+
+void bit_stream_delete (BitStream* stream)
+{
+  munmap(stream->memory_block, stream->size);
+  free(stream);
 }
 
 static void tree_visit_inner_node (NodeVisitor* visitor, InnerNode* node)
@@ -235,6 +261,8 @@ static void tree_destroy (NodeVisitor* visitor)
 {
   Tree* tree = (Tree*)visitor;
   Count i;
+
+  bit_stream_delete(tree->stream);
 
   bit_vector_delete(tree->tree);
   bit_vector_delete(tree->path);
@@ -348,9 +376,9 @@ void tree_build (Tree* tree)
   node_accept(tree->table[0], (NodeVisitor*)tree);
 }
 
-void tree_set_stream (Tree* tree, BitStream* bitstream)
+void tree_set_stream (Tree* tree, BitStream* stream)
 {
-  tree->stream = bitstream;
+  tree->stream = stream;
 }
 
 void tree_write (Tree* tree, const Value value)
@@ -409,12 +437,25 @@ void file_open_write (File* file)
 {
 }
 
-void file_read (File* file, BitStream* bitstream)
+void file_read (File* file, BitStream* stream)
 {
 }
 
-void file_write (File* file, BitStream* bitstream)
+void file_write (File* file, int backend, Count offset)
 {
+  int c;
+  BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_WRITE, offset);
+
+  tree_set_stream(file->tree, stream);
+
+  c = fgetc(file->backend);
+
+  while (c != EOF)
+  {
+    tree_write(file->tree, c);
+
+    c = fgetc(file->backend);
+  }
 }
 
 void file_delete (File* file)
@@ -447,6 +488,8 @@ void archive_add_file (Archive* archive, const char* file)
 void archive_compress (Archive* archive)
 {
   Count i;
+  Count* offset = (Count*)malloc(archive->files_count * sizeof(Count));
+  int backend = open(archive->name, O_WRONLY);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -465,10 +508,17 @@ void archive_compress (Archive* archive)
     free(file_compressed_size);
   }
 
+  offset[0] = 0;
+
+  for (i = 1; i < archive->files_count; ++i)
+  {
+    offset[i] = offset[i - 1] + archive->files[i]->compressed_size;
+  }
+
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
   {
-    file_write(archive->files[i], NULL);
+    file_write(archive->files[i], backend, offset[i]);
   }
 
   /**

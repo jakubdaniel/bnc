@@ -97,9 +97,10 @@ struct BitStream
 {
   Byte* memory_block;
   Count size;
+  Count count;
 };
 
-BitStream* bit_stream_new    (FILE* backend, Count size, int protocol, Count offset);
+BitStream* bit_stream_new    (int backend, Count size, int protocol, Count offset);
 void       bit_stream_write  (BitStream* stream, BitVector* vector);
 void       bit_stream_delete (BitStream* stream);
 
@@ -123,7 +124,7 @@ Tree* tree_new        (void);
 void  tree_register   (Tree* tree, const Value value);
 void  tree_load       (Tree* tree);
 void  tree_build      (Tree* tree);
-void  tree_set_stream (Tree* tree, BitStream* bitstream);
+void  tree_set_stream (Tree* tree, BitStream* stream);
 void  tree_write      (Tree* tree, const Value value);
 void  tree_read       (Tree* tree, Value* value);
 void  tree_delete     (Tree* tree);
