@@ -7,6 +7,9 @@
 #include <vector>
 #include <string>
 
+#define WORDSIZE sizeof(size_t)
+#define BYTESIZE 8
+
 using namespace std;
 
 namespace bnc {
@@ -31,11 +34,11 @@ namespace bnc {
       }
 
       void operator<< (Bit bit) {
-        if (count == 8) {
+        if (count == BYTESIZE) {
 	  flush();
 	}
 
-	buffer |= ((bit & 1) << (8 - count - 1));
+	buffer |= ((bit & 1) << (BYTESIZE - count - 1));
 	++count;
       }
 
@@ -43,7 +46,7 @@ namespace bnc {
         if (count == 0) {
 	  in->read(&buffer, 1);
 
-	  count = 8;
+	  count = BYTESIZE;
 	}
 
 	--count;
@@ -97,7 +100,7 @@ namespace bnc {
       }
 
       Leaf(BitStream& bitstream) : value(0) {
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < BYTESIZE; ++i) {
 	  BitStream::Bit bit;
 
 	  bitstream >> bit;
@@ -385,11 +388,11 @@ namespace bnc {
 	size_t head_size;
 	size_t offset = 0;
 
-	in.seekg(-4, in.end);
+	in.seekg(-WORDSIZE, in.end);
 
 	deserialise(head_size, in);
 
-	in.seekg(-head_size - 4, in.end);
+	in.seekg(-head_size - WORDSIZE, in.end);
 
 	deserialise(size, in);
 
@@ -438,7 +441,7 @@ namespace bnc {
 
     private:
       void serialise(size_t number, ofstream& out) {
-        for (int i = 0; i < 32; i += 8) {
+        for (int i = 0; i < WORDSIZE * BYTESIZE; i += BYTESIZE) {
 	  unsigned char byte = (number >> i) & 0xFF;
 
 	  out.write((char*)&byte, 1);
@@ -447,7 +450,7 @@ namespace bnc {
       void deserialise(size_t& number, ifstream& in) {
         number = 0;
 
-        for (int i = 0; i < 32; i += 8) {
+        for (int i = 0; i < WORDSIZE * BYTESIZE; i += BYTESIZE) {
           unsigned char byte;
 
 	  in.read((char*)&byte, 1);
