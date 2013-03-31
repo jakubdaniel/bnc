@@ -27,24 +27,26 @@ static char* pretty_print_size (Count size)
     "B", "KiB", "MiB", "GiB", "TiB", "PiB"
   };
 
+  Count copy  = size;
   Count power = 0;
   Count necessary;
   float float_size;
   char* buffer;
+  const char* format = "%.4f %s";
 
-  while (size >> 10 && power < sizeof(units) / sizeof(*units))
+  while ((size >> 10) && power < sizeof(units) / sizeof(*units))
   {
     size >>= 10;
     ++power;
   }
 
-  float_size = ((float)size) / (1 << (10 * (power - 1)));
+  float_size = ((float)copy) / (1 << (10 * power));
 
-  necessary = snprintf(NULL, 0, "%.2f %s", float_size, units[power]);
+  necessary = snprintf(NULL, 0, format, float_size, units[power]) + 1;
 
-  buffer = (char*)malloc((necessary + 1) * sizeof(char));
+  buffer = (char*)malloc(necessary * sizeof(char));
   
-  snprintf(buffer, necessary, "%.2f %s", float_size, units[power]);
+  snprintf(buffer, necessary, format, float_size, units[power]);
 
   return buffer;
 }
