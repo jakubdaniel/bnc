@@ -610,7 +610,7 @@ void archive_compress (Archive* archive)
   Count offset = 0;
   Count count       = htonll(archive->files_count);
   Count head_length = 0;
-  int backend       = open(archive->name, O_RDWR | O_CREAT | O_TRUNC);
+  int backend       = open(archive->name, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -654,16 +654,21 @@ void archive_compress (Archive* archive)
 
   for (i = 0; i < archive->files_count; ++i)
   {
+    char* name;
+    Count name_length;
     Count size            = htonll(archive->files[i]->size);
     Count compressed_size = htonll(archive->files[i]->compressed_size);
-    Count name_length     = strlen(archive->files[i]->name);
+
+    name        = strrchr(archive->files[i]->name, '/');
+    name        = name ? name : archive->files[i]->name;
+    name_length = strlen(name);
 
     head_length += sizeof(Count) + name_length + 2 * sizeof(Count);
 
     name_length = htonll(name_length);
 
     write(backend, &name_length,     sizeof(Count));
-    write(backend, archive->files[i]->name, strlen(archive->files[i]->name));
+    write(backend, name,             strlen(name));
     write(backend, &size,            sizeof(Count));
     write(backend, &compressed_size, sizeof(Count));
 
@@ -680,7 +685,7 @@ void archive_decompress (Archive* archive)
   Count offset = 0;
   Count count;
   Count head_length;
-  int backend = open(archive->name, O_RDWR);
+  int backend = open(archive->name, O_RDONLY);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
