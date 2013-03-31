@@ -120,14 +120,14 @@ struct Tree
   BitStream* stream;
 };
 
-Tree* tree_new        (void);
-void  tree_register   (Tree* tree, const Value value);
-void  tree_load       (Tree* tree);
-void  tree_build      (Tree* tree);
-void  tree_set_stream (Tree* tree, BitStream* stream);
-void  tree_write      (Tree* tree, const Value value);
-void  tree_read       (Tree* tree, Value* value);
-void  tree_delete     (Tree* tree);
+Tree* tree_new              (void);
+void  tree_register         (Tree* tree, const Value value);
+void  tree_build            (Tree* tree);
+void  tree_set_write_stream (Tree* tree, BitStream* stream);
+void  tree_set_read_stream  (Tree* tree, BitStream* stream);
+void  tree_write            (Tree* tree, const Value value);
+void  tree_read             (Tree* tree, Value* value);
+void  tree_delete           (Tree* tree);
 
 typedef struct File File;
 

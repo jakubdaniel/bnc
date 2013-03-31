@@ -225,6 +225,8 @@ void bit_stream_read (BitStream* stream, Bit* bit)
 {
   *bit = (stream->memory_block[stream->count / 8] & (1 << (stream->count % 8))) ? ONE : ZERO;
 
+  printf("%i", *bit);
+
   ++stream->count;
 }
 
@@ -310,7 +312,6 @@ static NodeVisitorClass tree_class =
 Tree* tree_new (void)
 {
   Tree* tree = (Tree*)malloc(sizeof(Tree));
-  Count i;
 
   tree->parent.class = &tree_class;
 
@@ -320,13 +321,8 @@ Tree* tree_new (void)
   memset(tree->translations, 0, sizeof(tree->translations));
 
   tree->bit_count = 0;
-  tree->count     = WORDS;
-
-  for (i = 0; i < tree->count; ++i)
-  {
-    tree->table[i] = (Node*)leaf_node_new(i, 0);
-  }
-
+  tree->count     = 0;
+  
   return tree;
 }
 
@@ -365,6 +361,15 @@ static void tree_clear (Tree* tree)
 
 void tree_build (Tree* tree)
 {
+  Count i;
+
+  tree->count = WORDS;
+
+  for (i = 0; i < tree->count; ++i)
+  {
+    tree->table[i] = (Node*)leaf_node_new(i, 0);
+  }
+
   tree_clear(tree);
 
   /**
@@ -399,11 +404,47 @@ void tree_build (Tree* tree)
   node_accept(tree->table[0], (NodeVisitor*)tree);
 }
 
-void tree_set_stream (Tree* tree, BitStream* stream)
+static Node* tree_load (Tree* tree)
+{
+  Bit bit;
+  Count i;
+  Value value = 0;
+
+  bit_stream_read(tree->stream, &bit);
+
+  switch (bit)
+  {
+    case ONE:
+      for (i = 0; i < sizeof(Value) * 8; ++i)
+      {
+        bit_stream_read(tree->stream, &bit);
+
+	value |= bit << i;
+      }
+
+      return (Node*)leaf_node_new(value, 0);
+    case ZERO:
+      return (Node*)inner_node_new(tree_load(tree), tree_load(tree));
+  }
+
+  return NULL;
+}
+
+void tree_set_write_stream (Tree* tree, BitStream* stream)
 {
   tree->stream = stream;
 
   bit_stream_write(tree->stream, tree->tree);
+}
+
+void tree_set_read_stream (Tree* tree, BitStream* stream)
+{
+  tree->stream = stream;
+
+  tree->table[0] = tree_load(tree);
+  tree->count    = 1;
+
+  printf("\n");
 }
 
 void tree_write (Tree* tree, const Value value)
@@ -471,7 +512,7 @@ void file_write (File* file, int backend, Count offset)
   int c;
   BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_WRITE, offset);
 
-  tree_set_stream(file->tree, stream);
+  tree_set_write_stream(file->tree, stream);
 
   c = fgetc(file->backend);
 
@@ -600,8 +641,9 @@ int main (int argc, char** argv)
   BitStream stream;
   BitVector vector;
   Byte mem[100];
-  Byte vec[3] = {0x01, 0xFF, 0x01};
+  Byte vec[3] = {0x02, 0xFF, 0xFF};
   Count i;
+  Tree tree;
 
   stream.memory_block = mem;
   stream.count = 0;
@@ -619,6 +661,8 @@ int main (int argc, char** argv)
     printf("%i", (mem[i / 8] & (1 << (i % 8))) ? 1 : 0);
   }
   printf("\n");
+
+  tree_set_read_stream(&tree, &stream);
 
   return EXIT_SUCCESS;
 /*
