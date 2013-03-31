@@ -9,6 +9,8 @@
 
 #include <bnc.h>
 
+#define MAP_SIZE ((Count)4 * sysconf(_SC_PAGESIZE))
+
 #define CUT_LOWER(n, m)     ((n) &   ((1 << (m)) - 1))
 #define CUT_OFF_LOWER(n, m) ((n) & (~((1 << (m)) - 1)))
 #define CUT_UPPER(n, m)     ((n) & (~((1 << (8 - (m))) - 1)))
@@ -198,13 +200,29 @@ void bit_vector_delete (BitVector* vector)
   free(vector);
 }
 
-BitStream* bit_stream_new (int backend, Count size, int protocol, Count offset)
+static void bit_stream_load_block (BitStream* stream)
+{
+  stream->memory_block = mmap(NULL, MAP_SIZE, stream->protocol, MAP_SHARED, stream->backend, MAP_SIZE * (stream->offset / MAP_SIZE));
+  stream->count        = (stream->count % 8) + (stream->offset % MAP_SIZE) * 8;
+
+  printf("%p >> %p\n", stream->memory_block, stream->memory_block + MAP_SIZE);
+}
+
+static void bit_stream_flush_block (BitStream* stream)
+{
+  munmap(stream->memory_block, MAP_SIZE);
+  stream->offset = MAP_SIZE * (stream->offset / MAP_SIZE + 1);
+}
+
+BitStream* bit_stream_new (int backend, int protocol, Count offset)
 {
   BitStream* stream = (BitStream*)malloc(sizeof(BitStream*));
 
-  stream->memory_block = mmap(NULL, size, protocol, MAP_SHARED, backend, offset);
-  stream->size = size;
-  stream->count = 0;
+  stream->offset   = offset;
+  stream->backend  = backend;
+  stream->protocol = protocol;
+
+  bit_stream_load_block(stream);
 
   return stream;
 }
@@ -218,11 +236,35 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
   Byte* old_data = stream->memory_block;
   Byte* new_data = vector->bytes;
 
+  if (j >= MAP_SIZE)
+  {
+    bit_stream_flush_block(stream);
+    bit_stream_load_block(stream);
+
+    j = 0;
+  }
+
   old_data[j] = CUT_LOWER(old_data[j], offset) | CUT_UPPER(new_data[0] << offset, 8 - offset);
 
   for (i = 1; i < (vector->count + 7) / 8; ++i)
   {
+    if (i + j >= MAP_SIZE)
+    {
+      bit_stream_flush_block(stream);
+      bit_stream_load_block(stream);
+
+      j = -i;
+    }
+
     old_data[i + j] = CUT_LOWER(new_data[i - 1] >> (8 - offset), offset) | CUT_UPPER(new_data[i] << offset, 8 - offset);
+  }
+
+  if (i + j >= MAP_SIZE)
+  {
+    bit_stream_flush_block(stream);
+    bit_stream_load_block(stream);
+
+    j = -i;
   }
 
   old_data[i + j] = new_data[i - 1] >> (8 - offset);
@@ -239,7 +281,7 @@ void bit_stream_read (BitStream* stream, Bit* bit)
 
 void bit_stream_delete (BitStream* stream)
 {
-  munmap(stream->memory_block, stream->size);
+  bit_stream_flush_block(stream);
   free(stream);
 }
 
@@ -544,7 +586,7 @@ void file_read (File* file, int backend)
 {
   Count count = file->size;
 
-  BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_READ, file->offset);
+  BitStream* stream = bit_stream_new(backend, PROT_READ, file->offset);
 
   tree_set_read_stream(file->tree, stream);
 
@@ -563,7 +605,7 @@ void file_read (File* file, int backend)
 void file_write (File* file, int backend)
 {
   int c;
-  BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_WRITE, file->offset);
+  BitStream* stream = bit_stream_new(backend, PROT_READ|PROT_WRITE, file->offset);
 
   tree_set_write_stream(file->tree, stream);
 
@@ -610,7 +652,7 @@ void archive_compress (Archive* archive)
   Count offset = 0;
   Count count       = htonll(archive->files_count);
   Count head_length = 0;
-  int backend       = open(archive->name, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR);
+  int backend       = open(archive->name, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)

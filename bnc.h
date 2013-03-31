@@ -96,11 +96,13 @@ typedef struct BitStream BitStream;
 struct BitStream
 {
   Byte* memory_block;
-  Count size;
   Count count;
+  Count offset;
+  int backend;
+  int protocol;
 };
 
-BitStream* bit_stream_new    (int backend, Count size, int protocol, Count offset);
+BitStream* bit_stream_new    (int backend, int protocol, Count offset);
 void       bit_stream_write  (BitStream* stream, BitVector* vector);
 void       bit_stream_delete (BitStream* stream);
 
