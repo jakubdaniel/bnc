@@ -121,6 +121,7 @@ struct Tree
 };
 
 Tree* tree_new              (void);
+void  tree_empty            (Tree* tree);
 void  tree_register         (Tree* tree, const Value value);
 void  tree_build            (Tree* tree);
 void  tree_set_write_stream (Tree* tree, BitStream* stream);
@@ -139,13 +140,14 @@ struct File
 
   Count size;
   Count compressed_size;
+  Count offset;
 };
 
 File* file_new        (const char* name);
 void  file_open_read  (File* file);
 void  file_open_write (File* file);
-void  file_read       (File* file, int backend, Count offset);
-void  file_write      (File* file, int backend, Count offset);
+void  file_read       (File* file, int backend);
+void  file_write      (File* file, int backend);
 void  file_delete     (File* file);
 
 typedef struct Archive Archive;

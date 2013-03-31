@@ -4,6 +4,7 @@
 
 #include <fcntl.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #include <sys/mman.h>
 
 #include <bnc.h>
@@ -12,6 +13,12 @@
 #define CUT_OFF_LOWER(n, m) ((n) & (~((1 << (m)) - 1)))
 #define CUT_UPPER(n, m)     ((n) & (~((1 << (8 - (m))) - 1)))
 #define CUT_OFF_UPPER(n, m) ((n) &   ((1 << (8 - (m))) - 1))
+
+/**
+ * Little endian - Big endian
+ */
+#define htonll(n) (htonl((Count)(n) >> 32) | ((Count)htonl(n) << 32))
+#define ntohll(n) (ntohl((Count)(n) >> 32) | ((Count)ntohl(n) << 32))
 
 static char* pretty_print_size (Count size)
 {
@@ -142,7 +149,7 @@ BitVector* bit_vector_new (void)
 
   bit_vector->count = 0;
   bit_vector->size  = 1;
-  bit_vector->bytes = (Byte*)malloc(bit_vector->size);
+  bit_vector->bytes = (Byte*)malloc(bit_vector->size * sizeof(Byte));
 
   return bit_vector;
 }
@@ -153,7 +160,7 @@ BitVector* bit_vector_copy (BitVector* vector)
 
   bit_vector->count = vector->count;
   bit_vector->size  = vector->size;
-  bit_vector->bytes = (Byte*)malloc(bit_vector->size);
+  bit_vector->bytes = (Byte*)malloc(bit_vector->size * sizeof(Byte));
 
   memcpy(bit_vector->bytes, vector->bytes, (bit_vector->count + 7) / 8);
 
@@ -326,6 +333,18 @@ Tree* tree_new (void)
   return tree;
 }
 
+void tree_empty (Tree* tree)
+{
+  Count i;
+
+  tree->count = WORDS;
+
+  for (i = 0; i < tree->count; ++i)
+  {
+    tree->table[i] = (Node*)leaf_node_new(i, 0);
+  }
+}
+
 void tree_register (Tree* tree, const Value value)
 {
   ++tree->table[value]->count;
@@ -361,15 +380,6 @@ static void tree_clear (Tree* tree)
 
 void tree_build (Tree* tree)
 {
-  Count i;
-
-  tree->count = WORDS;
-
-  for (i = 0; i < tree->count; ++i)
-  {
-    tree->table[i] = (Node*)leaf_node_new(i, 0);
-  }
-
   tree_clear(tree);
 
   /**
@@ -481,8 +491,12 @@ File* file_new (const char* name)
 {
   File* file = (File*)malloc(sizeof(File));
 
-  file->name = (char*)malloc(strlen(name) + 1);
+  file->name = (char*)malloc((strlen(name) + 1) * sizeof(char));
   strcpy(file->name, name);
+
+  file->size = 0;
+  file->compressed_size = 0;
+  file->offset = 0;
 
   return file;
 }
@@ -493,6 +507,8 @@ void file_open_read (File* file)
 
   file->backend = fopen(file->name, "rb");
   file->tree    = tree_new();
+
+  tree_empty(file->tree);
 
   fseek(file->backend, 0, SEEK_SET);
 
@@ -519,11 +535,11 @@ void file_open_write (File* file)
   file->tree    = tree_new();
 }
 
-void file_read (File* file, int backend, Count offset)
+void file_read (File* file, int backend)
 {
   Count count = file->size;
 
-  BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_READ, offset);
+  BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_READ, file->offset);
 
   tree_set_read_stream(file->tree, stream);
 
@@ -539,10 +555,10 @@ void file_read (File* file, int backend, Count offset)
   }
 }
 
-void file_write (File* file, int backend, Count offset)
+void file_write (File* file, int backend)
 {
   int c;
-  BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_WRITE, offset);
+  BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_WRITE, file->offset);
 
   tree_set_write_stream(file->tree, stream);
 
@@ -568,7 +584,7 @@ Archive* archive_new (const char* name)
 {
   Archive* archive = (Archive*)malloc(sizeof(Archive));
 
-  archive->name = (char*)malloc(strlen(name) + 1);
+  archive->name = (char*)malloc((strlen(name) + 1) * sizeof(char));
   strcpy(archive->name, name);
 
   archive->files = NULL;
@@ -586,8 +602,10 @@ void archive_add_file (Archive* archive, const char* file)
 void archive_compress (Archive* archive)
 {
   Count i;
-  Count* offset = (Count*)malloc((archive->files_count + 1) * sizeof(Count));
-  int backend = open(archive->name, O_RDWR | O_CREAT);
+  Count offset = 0;
+  Count count       = htonll(archive->files_count);
+  Count head_length = 0;
+  int backend       = open(archive->name, O_RDWR | O_CREAT | O_TRUNC);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -606,36 +624,57 @@ void archive_compress (Archive* archive)
     free(file_compressed_size);
   }
 
-  offset[0] = 0;
-
-  for (i = 1; i < archive->files_count + 1; ++i)
+  for (i = 0; i < archive->files_count; ++i)
   {
-    offset[i] = offset[i - 1] + archive->files[i - 1]->compressed_size;
+    archive->files[i]->offset = offset;
+    offset += archive->files[i]->compressed_size;
   }
 
   /**
    * Stretch the file
    */
-  lseek(backend, offset[archive->files_count] - 1, SEEK_SET);
+  lseek(backend, offset, SEEK_SET);
   write(backend, "", 1);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
   {
-    file_write(archive->files[i], backend, offset[i]);
+    file_write(archive->files[i], backend);
   }
 
   /**
-   * TODO: write head
+   * Write head
    */
+  write(backend, &count, sizeof(Count));
 
-  free(offset);
+  for (i = 0; i < archive->files_count; ++i)
+  {
+    Count size            = htonll(archive->files[i]->size);
+    Count compressed_size = htonll(archive->files[i]->compressed_size);
+    Count name_length     = strlen(archive->files[i]->name);
+
+    head_length += sizeof(Count) + name_length + 2 * sizeof(Count);
+
+    name_length = htonll(name_length);
+
+    write(backend, &name_length,     sizeof(Count));
+    write(backend, archive->files[i]->name, strlen(archive->files[i]->name));
+    write(backend, &size,            sizeof(Count));
+    write(backend, &compressed_size, sizeof(Count));
+
+  }
+  head_length += 2 * sizeof(Count);
+  head_length = htonll(head_length);
+
+  write(backend, &head_length, sizeof(Count));
 }
 
 void archive_decompress (Archive* archive)
 {
   Count i;
-  Count* offset = (Count*)malloc((archive->files_count + 1) * sizeof(Count));
+  Count offset = 0;
+  Count count;
+  Count head_length;
   int backend = open(archive->name, O_RDWR);
 
   #pragma omp parallel for
@@ -645,21 +684,67 @@ void archive_decompress (Archive* archive)
   }
 
   /**
-   * TODO: read head
-   * set file sizes!!!
+   * Read head
    */
+  lseek(backend, -sizeof(Count), SEEK_END);
+  read(backend, &head_length, sizeof(Count));
+  head_length = ntohll(head_length);
 
-  offset[0] = 0;
+  lseek(backend, -head_length, SEEK_END);
+  read(backend, &count, sizeof(Count));
+  count = ntohll(count);
 
-  for (i = 1; i < archive->files_count + 1; ++i)
+  for (i = 0; i < count; ++i)
   {
-    offset[i] = offset[i - 1] + archive->files[i - 1]->compressed_size;
+    Count j;
+    Count name_length;
+    Count size;
+    Count compressed_size;
+    char* file_size;
+    char* file_compressed_size;
+    char* name;
+
+    read(backend, &name_length, sizeof(Count));
+    name_length = ntohll(name_length);
+
+    name = (char*)malloc((name_length + 1) * sizeof(char));
+    name[name_length] = '\0';
+
+    read(backend, name, name_length);
+
+    read(backend, &size,            sizeof(Count));
+    read(backend, &compressed_size, sizeof(Count));
+
+    size            = ntohll(size);
+    compressed_size = ntohll(compressed_size);
+
+    file_size            = pretty_print_size(size);
+    file_compressed_size = pretty_print_size(compressed_size);
+
+    printf("File `%s` %s >> %s\n", name, file_size, file_compressed_size);
+
+    free(file_size);
+    free(file_compressed_size);
+
+    for (j = 0; j < archive->files_count; ++j)
+    {
+      if (strcmp(name, archive->files[j]->name) == 0)
+      {
+        archive->files[j]->size            = size;
+	archive->files[j]->compressed_size = compressed_size;
+        archive->files[j]->offset          = offset;
+      }
+    }
+
+    free(name);
+
+    offset += compressed_size;
   }
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
   {
-    file_read(archive->files[i], backend, offset[i]);
+    file_read(archive->files[i], backend);
   }
 }
 
