@@ -232,8 +232,6 @@ void bit_stream_read (BitStream* stream, Bit* bit)
 {
   *bit = (stream->memory_block[stream->count / 8] & (1 << (stream->count % 8))) ? ONE : ZERO;
 
-  printf("%i", *bit);
-
   ++stream->count;
 }
 
@@ -419,11 +417,18 @@ static Node* tree_load (Tree* tree)
   Bit bit;
   Count i;
   Value value = 0;
+  Node* left;
+  Node* right;
 
   bit_stream_read(tree->stream, &bit);
 
   switch (bit)
   {
+    case ZERO:
+      left  = tree_load(tree);
+      right = tree_load(tree);
+
+      return (Node*)inner_node_new(left, right);
     case ONE:
       for (i = 0; i < sizeof(Value) * 8; ++i)
       {
@@ -433,8 +438,6 @@ static Node* tree_load (Tree* tree)
       }
 
       return (Node*)leaf_node_new(value, 0);
-    case ZERO:
-      return (Node*)inner_node_new(tree_load(tree), tree_load(tree));
   }
 
   return NULL;
@@ -474,8 +477,8 @@ void tree_read (Tree* tree, Value* value)
 
     switch (bit)
     {
-      case ONE:  cursor = ((InnerNode*)cursor)->right; break;
       case ZERO: cursor = ((InnerNode*)cursor)->left;  break;
+      case ONE:  cursor = ((InnerNode*)cursor)->right; break;
     }
   }
 
@@ -531,7 +534,7 @@ void file_open_read (File* file)
 
 void file_open_write (File* file)
 {
-  file->backend = fopen(file->name, "wb");
+  file->backend = fopen(file->name, "wb+");
   file->tree    = tree_new();
 }
 
