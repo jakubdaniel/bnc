@@ -515,10 +515,28 @@ void file_open_read (File* file)
 
 void file_open_write (File* file)
 {
+  file->backend = fopen(file->name, "wb");
+  file->tree    = tree_new();
 }
 
-void file_read (File* file, BitStream* stream)
+void file_read (File* file, int backend, Count offset)
 {
+  Count count = file->size;
+
+  BitStream* stream = bit_stream_new(backend, file->compressed_size, PROT_READ, offset);
+
+  tree_set_read_stream(file->tree, stream);
+
+  while (count > 0)
+  {
+    Value value;
+
+    tree_read(file->tree, &value);
+
+    fputc((int)value, file->backend);
+
+    --count;
+  }
 }
 
 void file_write (File* file, int backend, Count offset)
@@ -610,11 +628,15 @@ void archive_compress (Archive* archive)
   /**
    * TODO: write head
    */
+
+  free(offset);
 }
 
 void archive_decompress (Archive* archive)
 {
   Count i;
+  Count* offset = (Count*)malloc((archive->files_count + 1) * sizeof(Count));
+  int backend = open(archive->name, O_RDWR);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -624,12 +646,20 @@ void archive_decompress (Archive* archive)
 
   /**
    * TODO: read head
+   * set file sizes!!!
    */
+
+  offset[0] = 0;
+
+  for (i = 1; i < archive->files_count + 1; ++i)
+  {
+    offset[i] = offset[i - 1] + archive->files[i - 1]->compressed_size;
+  }
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
   {
-    file_read(archive->files[i], NULL);
+    file_read(archive->files[i], backend, offset[i]);
   }
 }
 
@@ -652,43 +682,9 @@ const char* help = "./bnc [bu] archive file1 file2 ...";
 
 int main (int argc, char** argv)
 {
-  BitStream stream;
-  BitVector vector;
-  Byte mem[100];
-  Byte vec[3] = {0x02, 0xFF, 0xAA};
-  Count i;
-  Tree tree;
-  Value value;
-
-  stream.memory_block = mem;
-  stream.count = 0;
-
-  vector.bytes = vec;
-  vector.count = 19;
-
-  memset(mem, 0, 100);
-
-  bit_stream_write(&stream, &vector);
-  bit_stream_write(&stream, &vector);
-
-  for (i = 0; i < stream.count; ++i)
-  {
-    printf("%i", (mem[i / 8] & (1 << (i % 8))) ? 1 : 0);
-  }
-  printf("\n");
-
-  stream.count = 0;
-  tree_set_read_stream(&tree, &stream);
-
-  tree_read(&tree, &value);
-
-  printf("Value: %2X\n", value);
-
-  return EXIT_SUCCESS;
-/*
   char op;
   Archive* archive;
-  Count i;
+  int i;
 
   if (argc < 3)
   {
@@ -718,5 +714,4 @@ int main (int argc, char** argv)
   archive_delete(archive);
 
   return EXIT_SUCCESS;
-*/
 }

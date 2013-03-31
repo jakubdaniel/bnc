@@ -144,6 +144,8 @@ struct File
 File* file_new        (const char* name);
 void  file_open_read  (File* file);
 void  file_open_write (File* file);
+void  file_read       (File* file, int backend, Count offset);
+void  file_write      (File* file, int backend, Count offset);
 void  file_delete     (File* file);
 
 typedef struct Archive Archive;

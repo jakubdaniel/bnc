@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -I. -ggdb -fopenmp -Wall -Werror -pedantic
+CFLAGS = -I. -ggdb -fopenmp -Wall -Werror -Wextra -pedantic
 
 all: bnc
 
