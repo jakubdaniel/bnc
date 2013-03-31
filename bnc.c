@@ -443,8 +443,6 @@ void tree_set_read_stream (Tree* tree, BitStream* stream)
 
   tree->table[0] = tree_load(tree);
   tree->count    = 1;
-
-  printf("\n");
 }
 
 void tree_write (Tree* tree, const Value value)
@@ -456,6 +454,22 @@ void tree_write (Tree* tree, const Value value)
 
 void tree_read (Tree* tree, Value* value)
 {
+  Node* cursor = tree->table[0];
+
+  while (cursor->class == &inner_node_class)
+  {
+    Bit bit;
+
+    bit_stream_read(tree->stream, &bit);
+
+    switch (bit)
+    {
+      case ONE:  cursor = ((InnerNode*)cursor)->right; break;
+      case ZERO: cursor = ((InnerNode*)cursor)->left;  break;
+    }
+  }
+
+  *value = ((LeafNode*)cursor)->value;
 }
 
 void tree_delete (Tree* tree)
@@ -641,9 +655,10 @@ int main (int argc, char** argv)
   BitStream stream;
   BitVector vector;
   Byte mem[100];
-  Byte vec[3] = {0x02, 0xFF, 0xFF};
+  Byte vec[3] = {0x02, 0xFF, 0xAA};
   Count i;
   Tree tree;
+  Value value;
 
   stream.memory_block = mem;
   stream.count = 0;
@@ -662,7 +677,12 @@ int main (int argc, char** argv)
   }
   printf("\n");
 
+  stream.count = 0;
   tree_set_read_stream(&tree, &stream);
+
+  tree_read(&tree, &value);
+
+  printf("Value: %2X\n", value);
 
   return EXIT_SUCCESS;
 /*
