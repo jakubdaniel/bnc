@@ -97,6 +97,7 @@ typedef struct BitStream BitStream;
 struct BitStream
 {
   Byte* memory_block;
+  Count written;
   Count count;
   Count offset;
   int backend;

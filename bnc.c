@@ -9,7 +9,7 @@
 
 #include <bnc.h>
 
-#define MAP_SIZE ((Count)4096 * sysconf(_SC_PAGESIZE))
+#define MAP_SIZE ((Count)sysconf(_SC_PAGESIZE))
 
 #define CUT_LOWER(n, m)     ((n) &   ((1 << (m)) - 1))
 #define CUT_OFF_LOWER(n, m) ((n) & (~((1 << (m)) - 1)))
@@ -21,26 +21,6 @@
  */
 #define htonll(n) (htonl((Count)(n) >> 32) | ((Count)htonl(n) << 32))
 #define ntohll(n) (ntohl((Count)(n) >> 32) | ((Count)ntohl(n) << 32))
-
-#define STREAM_DEBUG false
-
-#if STREAM_DEBUG
-static void print_binary (Byte* bytes, Count offset, Count count)
-{
-  Count i;
-
-  for (i = offset; i < offset + count; ++i)
-  {
-    printf("%i", (bytes[i / 8] & (1 << (i % 8))) ? 1 : 0);
-    if ((i + 1) % 8 == 0)
-    {
-      printf(" ");
-    }
-  }
-
-  printf("\n");
-}
-#endif
 
 static char* pretty_print_size (Count size)
 {
@@ -184,7 +164,7 @@ BitVector* bit_vector_copy (BitVector* vector)
 
   bit_vector->count = vector->count;
   bit_vector->size  = vector->size;
-  bit_vector->bytes = (Byte*)malloc(bit_vector->size * sizeof(Byte));
+  bit_vector->bytes = (Byte*)malloc((bit_vector->size + 2) * sizeof(Byte));
 
   memcpy(bit_vector->bytes + 1, vector->bytes + 1, (bit_vector->count + 7) / 8);
 
@@ -217,8 +197,8 @@ void bit_vector_pop (BitVector* vector)
 void bit_vector_set_context (BitVector* vector, Byte left, Byte right)
 {
   vector->bytes[0] = left;
-  vector->bytes[(vector->count + 7) / 8 + 1 - 1] |= right << (vector->count % 8);
-  vector->bytes[(vector->count + 7) / 8 + 1    ]  = right >> (8 - (vector->count % 8));
+  vector->bytes[vector->count / 8 + 1] |= right << (vector->count % 8);
+  vector->bytes[vector->count / 8 + 2]  = right >> (8 - (vector->count % 8));
 }
 
 void bit_vector_delete (BitVector* vector)
@@ -243,6 +223,7 @@ BitStream* bit_stream_new (int backend, int protocol, Count offset)
 {
   BitStream* stream = (BitStream*)malloc(sizeof(BitStream));
 
+  stream->written  = 0;
   stream->count    = 0;
   stream->offset   = offset;
   stream->backend  = backend;
@@ -255,7 +236,7 @@ BitStream* bit_stream_new (int backend, int protocol, Count offset)
 
 static void bit_stream_write_byte (BitStream* stream, BitVector* vector, Count shift, Count stream_offset, Count vector_offset)
 {
-  if ((stream_offset + 7) / 8 >= MAP_SIZE)
+  if (stream_offset / 8 >= MAP_SIZE)
   {
     bit_stream_flush_block(stream);
     bit_stream_load_block(stream);
@@ -265,8 +246,10 @@ static void bit_stream_write_byte (BitStream* stream, BitVector* vector, Count s
   {
     Byte* destination = stream->memory_block;
     Byte* source      = vector->bytes;
+    Byte lower = CUT_LOWER(source[vector_offset / 8]     >> (8 - shift), shift);
+    Byte upper = CUT_UPPER(source[vector_offset / 8 + 1] <<       shift, 8 - shift);
 
-    destination[stream_offset / 8] = CUT_LOWER(source[vector_offset / 8] >> (8 - shift), shift) | CUT_UPPER(source[vector_offset / 8 + 1] << shift, 8 - shift);
+    destination[stream_offset / 8] = lower | upper;
   }
 }
 
@@ -279,33 +262,23 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
 
   if (stream->count > 0)
   {
-    left = stream->memory_block[(stream->count + 7) / 8 - 1] << (8 - shift);
+    left = stream->memory_block[stream->count / 8] << (8 - shift);
   }
 
   bit_vector_set_context(vector, left, right);
 
-#if STREAM_DEBUG
-  printf("B:\n");
-  print_binary(stream->memory_block, 0, stream->count);
-#endif
-
-  for (i = 0; i < vector->count + 7; i += 8)
+  for (i = 0; i < vector->count; i += 8)
   {
     bit_stream_write_byte(stream, vector, shift, stream->count + i, i);
   }
 
-  stream->count += vector->count;
-
-#if STREAM_DEBUG
-  printf("A:\n");
-  print_binary(vector->bytes + 1, 0, vector->count);
-  print_binary(stream->memory_block, 0, stream->count);
-#endif
+  stream->written += vector->count;
+  stream->count   += vector->count;
 }
 
 void bit_stream_read (BitStream* stream, Bit* bit)
 {
-  if ((stream->count + 7) / 8 >= MAP_SIZE)
+  if (stream->count / 8 >= MAP_SIZE)
   {
     bit_stream_flush_block(stream);
     bit_stream_load_block(stream);
@@ -654,7 +627,7 @@ void file_read (File* file, int backend)
 void file_write (File* file, int backend)
 {
   int c;
-  BitStream* stream = bit_stream_new(backend, PROT_READ|PROT_WRITE, file->offset);
+  BitStream* stream = bit_stream_new(backend, PROT_READ | PROT_WRITE, file->offset);
 
   tree_set_write_stream(file->tree, stream);
 
@@ -701,7 +674,7 @@ void archive_compress (Archive* archive)
   Count offset = 0;
   Count count       = htonll(archive->files_count);
   Count head_length = 0;
-  int backend       = open(archive->name, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+  int backend       = open(archive->name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -727,10 +700,9 @@ void archive_compress (Archive* archive)
   }
 
   /**
-   * Stretch the file
+   * Stretch
    */
-  lseek(backend, offset, SEEK_SET);
-  write(backend, "", 1);
+  ftruncate(backend, offset);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -741,6 +713,7 @@ void archive_compress (Archive* archive)
   /**
    * Write head
    */
+  lseek(backend, offset, SEEK_SET);
   write(backend, &count, sizeof(Count));
 
   for (i = 0; i < archive->files_count; ++i)
@@ -897,7 +870,7 @@ int main (int argc, char** argv)
 
   switch (op)
   {
-    case 'b': archive_compress(archive); break;
+    case 'b': archive_compress(archive);   break;
     case 'u': archive_decompress(archive); break;
   }
 
