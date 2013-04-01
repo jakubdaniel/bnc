@@ -260,14 +260,14 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
   Byte left  = 0;
   Byte right = 0;
 
-  if (stream->count > 0)
+  if (shift > 0)
   {
     left = stream->memory_block[stream->count / 8] << (8 - shift);
   }
 
   bit_vector_set_context(vector, left, right);
 
-  for (i = 0; i < vector->count; i += 8)
+  for (i = 0; i < shift + vector->count; i += 8)
   {
     bit_stream_write_byte(stream, vector, shift, stream->count + i, i);
   }
@@ -671,10 +671,11 @@ void archive_add_file (Archive* archive, const char* file)
 void archive_compress (Archive* archive)
 {
   Count i;
-  Count offset = 0;
-  Count count       = htonll(archive->files_count);
-  Count head_length = 0;
-  int backend       = open(archive->name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+  Count aligned_offset = 0;
+  Count offset         = 0;
+  Count count          = htonll(archive->files_count);
+  Count head_length    = 0;
+  int backend          = open(archive->name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -702,7 +703,8 @@ void archive_compress (Archive* archive)
   /**
    * Stretch
    */
-  ftruncate(backend, offset);
+  aligned_offset = MAP_SIZE * ((offset + MAP_SIZE - 1) / MAP_SIZE + 1);
+  ftruncate(backend, aligned_offset);
 
   #pragma omp parallel for
   for (i = 0; i < archive->files_count; ++i)
@@ -713,7 +715,8 @@ void archive_compress (Archive* archive)
   /**
    * Write head
    */
-  lseek(backend, offset, SEEK_SET);
+  ftruncate(backend, offset);
+  lseek(backend, 0, SEEK_END);
   write(backend, &count, sizeof(Count));
 
   for (i = 0; i < archive->files_count; ++i)
