@@ -217,8 +217,8 @@ void bit_vector_pop (BitVector* vector)
 void bit_vector_set_context (BitVector* vector, Byte left, Byte right)
 {
   vector->bytes[0] = left;
-  vector->bytes[(vector->count + 7) / 8 + 1 - 1] |= right >> (vector->count % 8);
-  vector->bytes[(vector->count + 7) / 8 + 1    ]  = right << (8 - (vector->count % 8));
+  vector->bytes[(vector->count + 7) / 8 + 1 - 1] |= right << (vector->count % 8);
+  vector->bytes[(vector->count + 7) / 8 + 1    ]  = right >> (8 - (vector->count % 8));
 }
 
 void bit_vector_delete (BitVector* vector)
@@ -274,8 +274,15 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
 {
   Count i;
   Count shift = stream->count % 8;
+  Byte left  = 0;
+  Byte right = 0;
 
-  bit_vector_set_context(vector, stream->memory_block[stream->count / 8] << (8 - shift), 0);
+  if (stream->count > 0)
+  {
+    left = stream->memory_block[(stream->count + 7) / 8 - 1] << (8 - shift);
+  }
+
+  bit_vector_set_context(vector, left, right);
 
 #if STREAM_DEBUG
   printf("B:\n");
@@ -298,6 +305,12 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
 
 void bit_stream_read (BitStream* stream, Bit* bit)
 {
+  if ((stream->count + 7) / 8 >= MAP_SIZE)
+  {
+    bit_stream_flush_block(stream);
+    bit_stream_load_block(stream);
+  }
+
   *bit = (stream->memory_block[stream->count / 8] & (1 << (stream->count % 8))) ? ONE : ZERO;
 
   ++stream->count;
@@ -738,7 +751,7 @@ void archive_compress (Archive* archive)
     Count compressed_size = htonll(archive->files[i]->compressed_size);
 
     name        = strrchr(archive->files[i]->name, '/');
-    name        = name ? name : archive->files[i]->name;
+    name        = name ? name + 1 : archive->files[i]->name;
     name_length = strlen(name);
 
     head_length += sizeof(Count) + name_length + 2 * sizeof(Count);
