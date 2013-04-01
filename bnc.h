@@ -85,11 +85,12 @@ struct BitVector
   Byte* bytes;
 };
 
-BitVector* bit_vector_new    (void);
-BitVector* bit_vector_copy   (BitVector* vector);
-void       bit_vector_push   (BitVector* vector, const Bit bit);
-void       bit_vector_pop    (BitVector* vector);
-void       bit_vector_delete (BitVector* vector);
+BitVector* bit_vector_new         (void);
+BitVector* bit_vector_copy        (BitVector* vector);
+void       bit_vector_push        (BitVector* vector, const Bit bit);
+void       bit_vector_pop         (BitVector* vector);
+void       bit_vector_set_context (BitVector* vector, Byte left, Byte right);
+void       bit_vector_delete      (BitVector* vector);
 
 typedef struct BitStream BitStream;
 
@@ -104,6 +105,7 @@ struct BitStream
 
 BitStream* bit_stream_new    (int backend, int protocol, Count offset);
 void       bit_stream_write  (BitStream* stream, BitVector* vector);
+void       bit_stream_read   (BitStream* stream, Bit* bit);
 void       bit_stream_delete (BitStream* stream);
 
 typedef struct Tree Tree;

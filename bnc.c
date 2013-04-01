@@ -9,7 +9,7 @@
 
 #include <bnc.h>
 
-#define MAP_SIZE ((Count)4 * sysconf(_SC_PAGESIZE))
+#define MAP_SIZE ((Count)4096 * sysconf(_SC_PAGESIZE))
 
 #define CUT_LOWER(n, m)     ((n) &   ((1 << (m)) - 1))
 #define CUT_OFF_LOWER(n, m) ((n) & (~((1 << (m)) - 1)))
@@ -21,6 +21,26 @@
  */
 #define htonll(n) (htonl((Count)(n) >> 32) | ((Count)htonl(n) << 32))
 #define ntohll(n) (ntohl((Count)(n) >> 32) | ((Count)ntohl(n) << 32))
+
+#define STREAM_DEBUG false
+
+#if STREAM_DEBUG
+static void print_binary (Byte* bytes, Count offset, Count count)
+{
+  Count i;
+
+  for (i = offset; i < offset + count; ++i)
+  {
+    printf("%i", (bytes[i / 8] & (1 << (i % 8))) ? 1 : 0);
+    if ((i + 1) % 8 == 0)
+    {
+      printf(" ");
+    }
+  }
+
+  printf("\n");
+}
+#endif
 
 static char* pretty_print_size (Count size)
 {
@@ -153,7 +173,7 @@ BitVector* bit_vector_new (void)
 
   bit_vector->count = 0;
   bit_vector->size  = 1;
-  bit_vector->bytes = (Byte*)malloc(bit_vector->size * sizeof(Byte));
+  bit_vector->bytes = (Byte*)malloc((bit_vector->size + 2) * sizeof(Byte));
 
   return bit_vector;
 }
@@ -166,21 +186,21 @@ BitVector* bit_vector_copy (BitVector* vector)
   bit_vector->size  = vector->size;
   bit_vector->bytes = (Byte*)malloc(bit_vector->size * sizeof(Byte));
 
-  memcpy(bit_vector->bytes, vector->bytes, (bit_vector->count + 7) / 8);
+  memcpy(bit_vector->bytes + 1, vector->bytes + 1, (bit_vector->count + 7) / 8);
 
   return bit_vector;
 }
 
 void bit_vector_push (BitVector* vector, const Bit bit)
 {
-  vector->bytes[vector->count / 8] &= ~(1 << (vector->count % 8));
-  vector->bytes[vector->count / 8] |= bit << (vector->count % 8);
+  vector->bytes[vector->count / 8 + 1] &= ~(1 << (vector->count % 8));
+  vector->bytes[vector->count / 8 + 1] |= bit << (vector->count % 8);
 
   ++vector->count;
 
   if ((vector->count + 7) / 8 + 1 > vector->size)
   {
-    vector->bytes = (Byte*)realloc(vector->bytes, vector->size *= 2);
+    vector->bytes = (Byte*)realloc(vector->bytes, ((vector->size *= 2) + 2) * sizeof(Byte));
   }
 }
 
@@ -190,8 +210,15 @@ void bit_vector_pop (BitVector* vector)
 
   if ((vector->count + 7) / 8 + 1 < vector->size / 2)
   {
-    vector->bytes = (Byte*)realloc(vector->bytes, vector->size /= 2);
+    vector->bytes = (Byte*)realloc(vector->bytes, ((vector->size /= 2) + 2) * sizeof(Byte));
   }
+}
+
+void bit_vector_set_context (BitVector* vector, Byte left, Byte right)
+{
+  vector->bytes[0] = left;
+  vector->bytes[(vector->count + 7) / 8 + 1 - 1] |= right >> (vector->count % 8);
+  vector->bytes[(vector->count + 7) / 8 + 1    ]  = right << (8 - (vector->count % 8));
 }
 
 void bit_vector_delete (BitVector* vector)
@@ -204,8 +231,6 @@ static void bit_stream_load_block (BitStream* stream)
 {
   stream->memory_block = mmap(NULL, MAP_SIZE, stream->protocol, MAP_SHARED, stream->backend, MAP_SIZE * (stream->offset / MAP_SIZE));
   stream->count        = (stream->count % 8) + (stream->offset % MAP_SIZE) * 8;
-
-  printf("%p >> %p\n", stream->memory_block, stream->memory_block + MAP_SIZE);
 }
 
 static void bit_stream_flush_block (BitStream* stream)
@@ -216,8 +241,9 @@ static void bit_stream_flush_block (BitStream* stream)
 
 BitStream* bit_stream_new (int backend, int protocol, Count offset)
 {
-  BitStream* stream = (BitStream*)malloc(sizeof(BitStream*));
+  BitStream* stream = (BitStream*)malloc(sizeof(BitStream));
 
+  stream->count    = 0;
   stream->offset   = offset;
   stream->backend  = backend;
   stream->protocol = protocol;
@@ -227,49 +253,47 @@ BitStream* bit_stream_new (int backend, int protocol, Count offset)
   return stream;
 }
 
+static void bit_stream_write_byte (BitStream* stream, BitVector* vector, Count shift, Count stream_offset, Count vector_offset)
+{
+  if ((stream_offset + 7) / 8 >= MAP_SIZE)
+  {
+    bit_stream_flush_block(stream);
+    bit_stream_load_block(stream);
+    bit_stream_write_byte(stream, vector, shift, 0, vector_offset);
+  }
+  else
+  {
+    Byte* destination = stream->memory_block;
+    Byte* source      = vector->bytes;
+
+    destination[stream_offset / 8] = CUT_LOWER(source[vector_offset / 8] >> (8 - shift), shift) | CUT_UPPER(source[vector_offset / 8 + 1] << shift, 8 - shift);
+  }
+}
+
 void bit_stream_write (BitStream* stream, BitVector* vector)
 {
   Count i;
-  Count j = stream->count / 8;
-  Count offset = stream->count % 8;
-  
-  Byte* old_data = stream->memory_block;
-  Byte* new_data = vector->bytes;
+  Count shift = stream->count % 8;
 
-  if (j >= MAP_SIZE)
+  bit_vector_set_context(vector, stream->memory_block[stream->count / 8] << (8 - shift), 0);
+
+#if STREAM_DEBUG
+  printf("B:\n");
+  print_binary(stream->memory_block, 0, stream->count);
+#endif
+
+  for (i = 0; i < vector->count + 7; i += 8)
   {
-    bit_stream_flush_block(stream);
-    bit_stream_load_block(stream);
-
-    j = 0;
+    bit_stream_write_byte(stream, vector, shift, stream->count + i, i);
   }
-
-  old_data[j] = CUT_LOWER(old_data[j], offset) | CUT_UPPER(new_data[0] << offset, 8 - offset);
-
-  for (i = 1; i < (vector->count + 7) / 8; ++i)
-  {
-    if (i + j >= MAP_SIZE)
-    {
-      bit_stream_flush_block(stream);
-      bit_stream_load_block(stream);
-
-      j = -i;
-    }
-
-    old_data[i + j] = CUT_LOWER(new_data[i - 1] >> (8 - offset), offset) | CUT_UPPER(new_data[i] << offset, 8 - offset);
-  }
-
-  if (i + j >= MAP_SIZE)
-  {
-    bit_stream_flush_block(stream);
-    bit_stream_load_block(stream);
-
-    j = -i;
-  }
-
-  old_data[i + j] = new_data[i - 1] >> (8 - offset);
 
   stream->count += vector->count;
+
+#if STREAM_DEBUG
+  printf("A:\n");
+  print_binary(vector->bytes + 1, 0, vector->count);
+  print_binary(stream->memory_block, 0, stream->count);
+#endif
 }
 
 void bit_stream_read (BitStream* stream, Bit* bit)
@@ -328,7 +352,13 @@ static void tree_visit_leaf_node (NodeVisitor* visitor, LeafNode* node)
     }
   }
 
-  tree->translations[node->value] = bit_vector_copy(tree->path);
+  /**
+   * To avoid overwrites and memory leaks when there are dummy leaf nodes with the same value
+   */
+  if (tree->translations[node->value] == NULL)
+  {
+    tree->translations[node->value] = bit_vector_copy(tree->path);
+  }
 }
 
 static void tree_destroy (NodeVisitor* visitor)
@@ -346,6 +376,11 @@ static void tree_destroy (NodeVisitor* visitor)
     BitVector* vector = tree->translations[i];
 
     if (vector) bit_vector_delete(vector);
+  }
+
+  for (i = 0; i < tree->count; ++i)
+  {
+    node_delete(tree->table[i]);
   }
 
   free(tree);
@@ -430,6 +465,7 @@ void tree_build (Tree* tree)
   while (tree->count < 2)
   {
     tree->table[tree->count] = (Node*)leaf_node_new('\0', 0);
+    ++tree->count;
   }
 
   /**
@@ -719,6 +755,8 @@ void archive_compress (Archive* archive)
   head_length = htonll(head_length);
 
   write(backend, &head_length, sizeof(Count));
+
+  close(backend);
 }
 
 void archive_decompress (Archive* archive)
@@ -798,6 +836,8 @@ void archive_decompress (Archive* archive)
   {
     file_read(archive->files[i], backend);
   }
+
+  close(backend);
 }
 
 void archive_delete (Archive* archive)
