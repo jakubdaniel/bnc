@@ -18,6 +18,7 @@
 
 /**
  * Little endian - Big endian
+ * Not safe when it comes to multiple evaluations
  */
 #define htonll(n) (htonl((Count)(n) >> 32) | ((Count)htonl(n) << 32))
 #define ntohll(n) (ntohl((Count)(n) >> 32) | ((Count)ntohl(n) << 32))
@@ -223,7 +224,6 @@ BitStream* bit_stream_new (int backend, int protocol, Count offset)
 {
   BitStream* stream = (BitStream*)malloc(sizeof(BitStream));
 
-  stream->written  = 0;
   stream->count    = 0;
   stream->offset   = offset;
   stream->backend  = backend;
@@ -234,22 +234,25 @@ BitStream* bit_stream_new (int backend, int protocol, Count offset)
   return stream;
 }
 
-static void bit_stream_write_byte (BitStream* stream, BitVector* vector, Count shift, Count stream_offset, Count vector_offset)
+static void bit_stream_write_byte (BitStream* stream, BitVector* vector, Count shift, Count vector_offset)
 {
-  if (stream_offset / 8 >= MAP_SIZE)
+  if (stream->count / 8 >= MAP_SIZE)
   {
     bit_stream_flush_block(stream);
     bit_stream_load_block(stream);
-    bit_stream_write_byte(stream, vector, shift, 0, vector_offset);
+    bit_stream_write_byte(stream, vector, shift, vector_offset);
   }
   else
   {
     Byte* destination = stream->memory_block;
     Byte* source      = vector->bytes;
-    Byte lower = CUT_LOWER(source[vector_offset / 8]     >> (8 - shift), shift);
-    Byte upper = CUT_UPPER(source[vector_offset / 8 + 1] <<       shift, 8 - shift);
 
-    destination[stream_offset / 8] = lower | upper;
+    Byte lower = CUT_LOWER(source[vector_offset / 8    ] >> (8 - shift),     shift);
+    Byte upper = CUT_UPPER(source[vector_offset / 8 + 1] <<      shift , 8 - shift);
+
+    destination[stream->count / 8] = lower | upper;
+
+    stream->count += vector_offset + 8 < shift + vector->count ? 8 : shift + vector->count - vector_offset;
   }
 }
 
@@ -257,8 +260,8 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
 {
   Count i;
   Count shift = stream->count % 8;
-  Byte left  = 0;
-  Byte right = 0;
+  Byte left   = 0;
+  Byte right  = 0;
 
   if (shift > 0)
   {
@@ -267,13 +270,12 @@ void bit_stream_write (BitStream* stream, BitVector* vector)
 
   bit_vector_set_context(vector, left, right);
 
-  for (i = 0; i < shift + vector->count; i += 8)
-  {
-    bit_stream_write_byte(stream, vector, shift, stream->count + i, i);
-  }
+  stream->count -= shift;
 
-  stream->written += vector->count;
-  stream->count   += vector->count;
+  for (i = 0; i < vector->count + shift; i += 8) 
+  {
+    bit_stream_write_byte(stream, vector, shift, i);
+  }
 }
 
 void bit_stream_read (BitStream* stream, Bit* bit)
@@ -703,7 +705,7 @@ void archive_compress (Archive* archive)
   /**
    * Stretch
    */
-  aligned_offset = MAP_SIZE * ((offset + MAP_SIZE - 1) / MAP_SIZE + 1);
+  aligned_offset = MAP_SIZE * ((offset + MAP_SIZE - 1) / MAP_SIZE);
   ftruncate(backend, aligned_offset);
 
   #pragma omp parallel for
