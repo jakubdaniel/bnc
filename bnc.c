@@ -9,7 +9,7 @@
 
 #include <bnc.h>
 
-#define MAP_SIZE ((Count)sysconf(_SC_PAGESIZE))
+#define MAP_SIZE ((Count)4096 * sysconf(_SC_PAGESIZE))
 
 #define CUT_LOWER(n, m)     ((n) &   ((1 << (m)) - 1))
 #define CUT_OFF_LOWER(n, m) ((n) & (~((1 << (m)) - 1)))
